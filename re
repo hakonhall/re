@@ -8,10 +8,10 @@ function Usage {
 Usage: re [OPTION...] [--] REGEX [REPL]
 Run recursive egrep, replacing matches with REPL (if specified).
 
-Matches are replaced with 'sed -E s/REGEX/REPL/g'.  REGEX is interpreted as in
-'grep -E', and REPL may contain the special character & to refer to the matched
-text, and the special escapes \1 through \9 to refer to the corresponding
-matching sub-expressions.  The separator '/' may be overridden with -s.
+Replaces all matches of the extended regular expression REGEX, with the
+replacement text REPL that may contain the special character & to refer to the
+matched text, and the special escapes \1 through \9 to refer to the
+corresponding matching sub-expressions.
 
 Options:
   -d,--diff               View the replacement as a unified diff(1) patch.
@@ -21,7 +21,6 @@ Options:
   -i,--include GLOB       Same as grep(1) --include.
   -l,--list               List the matched files only.
   -p,--path PATH...       Run on PATH instead of '.'.  Repeatable.
-  -s,--separator SEP      Use SEP instead of / in sed(1) s/REGEX/REPL/g.
   -u,--update             Update the files in-place.
 EOF
 
@@ -35,7 +34,7 @@ function Fail {
 
 function Main {
     local mode=""
-    local sep=/
+    local sep=""
     local -a paths=()
     local -a grep_args=()
 
@@ -76,6 +75,7 @@ function Main {
                 shift 2 || Fail "Missing argument to $2"
                 ;;
             -s|--separator)
+                # Undocumented option for use in emergencies.
                 sep="$2"
                 (( ${#sep} == 1 )) || Fail "Invalid separator: '$sep'"
                 shift 2 || Fail "Missing argument to $2"
@@ -110,8 +110,22 @@ function Main {
     shift
     (( $# == 0 )) || Fail "Too many arguments"
 
-    [[ "$regex" != *"$sep"* ]] || Fail "REGEX contains separator '$sep'"
-    [[ "$repl" != *"$sep"* ]] || Fail "REPL contains separator '$sep'"
+    if test "$sep" == ""
+    then
+        local _sep
+        for _sep in / , : % = + ^ '|' ';' '#' '&' '{' '}' '~' '<' '>' '*'
+        do
+            [[ "$regex" == *"$_sep"* ]] && continue
+            [[ "$repl" == *"$_sep"* ]] && continue
+            sep="$_sep"
+            break
+        done
+        test "$sep" != "" || \
+            Fail "No valid sed(1) separator found: Use -s SEP to override"
+    else
+        [[ "$regex" != *"$sep"* ]] || Fail "REGEX contains separator '$sep'"
+        [[ "$repl" != *"$sep"* ]] || Fail "REPL contains separator '$sep'"
+    fi
 
     # sed -E is documented in sed(1) to use the same regular expressions as grep
     # -E.
@@ -140,7 +154,7 @@ function Main {
         test -x "$EDITOR" || Fail "EDITOR is not set"
         type patch &> /dev/null || Fail "Command not found: patch"
         declare -g PATCHFILE
-        PATCHFILE=$(mktemp) || Fail "Failed to create temporary patch file"
+        PATCHFILE=$(mktemp re.XXXXXX.diff) || Fail "Failed to create temporary patch file"
         trap 'rm "$PATCHFILE"' EXIT
     fi
 
@@ -167,6 +181,8 @@ function Main {
             if "$EDITOR" "$PATCHFILE" && test -s "$PATCHFILE"
             then
                 patch -p0 < "$PATCHFILE"
+            else
+                echo "Patch aborted"
             fi
             ;;
         update)
