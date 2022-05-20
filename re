@@ -8,10 +8,10 @@ function Usage {
 Usage: re [OPTION...] [--] REGEX [REPL]
 Run recursive egrep, replacing matches with REPL (if specified).
 
-Replaces all matches of the extended regular expression REGEX, with the
-replacement text REPL that may contain the special character & to refer to the
-matched text, and the special escapes \1 through \9 to refer to the
-corresponding matching sub-expressions.
+Replaces all matches of the extended regular expression REGEX in text files
+below the current working directory, with the replacement text REPL that may
+contain the special character & to refer to the matched text, and the special
+escapes \1 through \9 to refer to the corresponding matching sub-expressions.
 
 Options:
   -d,--diff               View the replacement as a unified diff(1) patch.
@@ -36,7 +36,7 @@ function Main {
     local mode=""
     local sep=""
     local -a paths=()
-    local -a grep_args=()
+    local -a grep_args=(-I)
 
     while (( $# > 0 ))
     do
@@ -135,7 +135,7 @@ function Main {
         :
     elif (( $? == 2 ))
     then
-        return 2 # Invalid REGEX
+        return 2 # Invalid REGEX: grep should already have written to stderr
     fi
 
     if (( ${#MAPFILE[@]} == 0 ))
