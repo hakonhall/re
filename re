@@ -8,14 +8,14 @@ function Usage {
 Usage: re [OPTION...] [--] REGEX [REPL]
 Run recursive egrep, replacing matches with REPL (if specified).
 
-Matches are replaced according to 'sed -E s/REGEX/REPL/g'.  The separator / may
-be overridden with -s.  REPL may contain the special character & to refer to the
-matched text, and the special escapes \1 through \9 to refer to the
-corresponding matching sub-expressions.
+Matches are replaced with 'sed -E s/REGEX/REPL/g'.  REGEX is interpreted as in
+'grep -E', and REPL may contain the special character & to refer to the matched
+text, and the special escapes \1 through \9 to refer to the corresponding
+matching sub-expressions.  The separator '/' may be overridden with -s.
 
 Options:
-  -d,--diff               View modifications in unified diff(1) format.
-  -e,--editor             Open EDITOR to edit patch before it is applied.
+  -d,--diff               View the replacement as a unified diff(1) patch.
+  -e,--editor             Open EDITOR to edit the patch before it is applied.
   -x,--exclude GLOB       Same as grep(1) --exclude.
   -X,--exclude-dir GLOB   Same as grep(1) --exclude-dir.
   -i,--include GLOB       Same as grep(1) --include.
