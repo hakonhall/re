@@ -25,7 +25,7 @@ Options:
 
 There are two main use cases of `re`: Recursive egrep described here, and replacement described in the next section.
 
-`re` is just a shorthand for `grep -rEI` - the following are equivalent:
+`re` is just a shorthand for `grep --recursive --extended-regexp --binary-files=without-match`. The following are equivalent:
 
 ```
 $ re REGEX
