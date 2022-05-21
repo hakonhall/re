@@ -111,12 +111,12 @@ function Main {
 
     if test "$mode" == list
     then
-        grep -rEl -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
+        grep --color=auto -rEl -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
         return $?
     elif (( $# == 0 ))
     then
         test "$mode" == "" || Fail "Missing REPL"
-        grep -rE -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
+        grep --color=auto -rE -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
         return $?
     fi
 
