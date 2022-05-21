@@ -6,10 +6,10 @@ set -o pipefail
 function Usage {
     cat <<'EOF'
 Usage: re [OPTION...] [--] REGEX [REPL]
-Run recursive egrep, replacing matches with REPL (if specified).
+Runs recursive egrep, optionally replacing matches with REPL.
 
-Replaces all matches of the extended regular expression REGEX in text files
-below the current working directory, with the replacement text REPL that may
+With REPL, all matches of the extended regular expression REGEX in the text
+files below the current working directory are replaced by REPL.  REPL may
 contain the special character & to refer to the matched text, and the special
 escapes \1 through \9 to refer to the corresponding matching sub-expressions.
 
