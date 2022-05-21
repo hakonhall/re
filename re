@@ -18,9 +18,12 @@ Options:
   -e,--editor             Open EDITOR to edit the patch before it is applied.
   -x,--exclude GLOB       Same as grep(1) --exclude.
   -X,--exclude-dir GLOB   Same as grep(1) --exclude-dir.
+  -f,--filename           Prefix each line with filename. Default with >1 file.
+  -F,--no-filename        Suppress prefixing each line with filename.
   -i,--include GLOB       Same as grep(1) --include.
   -l,--list               List the matched files only.
   -p,--path PATH...       Run on PATH instead of '.'.  Repeatable.
+  -q,--quiet              Avoid printing to stdout.
   -u,--update             Update the files in-place.
 EOF
 
@@ -33,8 +36,7 @@ function Fail {
 }
 
 function Main {
-    local mode=""
-    local sep=""
+    local mode="" sep="" fn_arg="" q_arg=""
     local -a paths=()
     local -a grep_args=(-I)
 
@@ -51,6 +53,14 @@ function Main {
                 ;;
             -e|--editor)
                 mode=editor
+                shift
+                ;;
+            -f|--filename)
+                fn_arg=-H # --with-filename
+                shift
+                ;;
+            -F|--no-filename)
+                fn_arg=-h # --no-filename
                 shift
                 ;;
             -x|--exclude)
@@ -73,6 +83,10 @@ function Main {
             -p|--path)
                 paths+=("$2")
                 shift 2 || Fail "Missing argument to $2"
+                ;;
+            -q|--quiet)
+                q_arg=-q
+                shift
                 ;;
             -s|--separator)
                 # Undocumented option for use in emergencies.
@@ -97,12 +111,12 @@ function Main {
 
     if test "$mode" == list
     then
-        grep -rEl -e "$regex" "${grep_args[@]}" "${paths[@]}"
+        grep -rEl -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
         return $?
     elif (( $# == 0 ))
     then
         test "$mode" == "" || Fail "Missing REPL"
-        grep -rE -e "$regex" "${grep_args[@]}" "${paths[@]}"
+        grep -rE -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
         return $?
     fi
 
@@ -112,15 +126,13 @@ function Main {
 
     if test "$sep" == ""
     then
-        local _sep
-        for _sep in / , : % = + ^ '|' ';' '#' '&' '{' '}' '~' '<' '>' '*'
+        for sep in / , : % = + ^ '|' ';' '#' '&' '{' '}' '~' '<' '>' '*' $'\0'
         do
-            [[ "$regex" == *"$_sep"* ]] && continue
-            [[ "$repl" == *"$_sep"* ]] && continue
-            sep="$_sep"
+            [[ "$regex" == *"$sep"* ]] && continue
+            [[ "$repl" == *"$sep"* ]] && continue
             break
         done
-        test "$sep" != "" || \
+        test "$sep" != $'\0' || \
             Fail "No valid sed(1) separator found: Use -s SEP to override"
     else
         [[ "$regex" != *"$sep"* ]] || Fail "REGEX contains separator '$sep'"
@@ -140,15 +152,23 @@ function Main {
 
     if (( ${#MAPFILE[@]} == 0 ))
     then
-        if test "$mode" == update
+        if test "$mode" == update && test -z "$q_arg"
         then
             echo "0 files updated"
         fi
-        return 0
+        return 1 # no matches => exit code 1 with grep, so too with replace?
     fi
     local -a files=("${MAPFILE[@]}")
 
     test "$mode" != "" || mode=repl
+
+    if test "$q_arg" == -q
+    then
+        case "$mode" in
+            repl|diff) return 0 ;;
+        esac
+    fi
+
     if test "$mode" == editor
     then
         test -x "$EDITOR" || Fail "EDITOR is not set"
@@ -160,6 +180,20 @@ function Main {
 
     type sed &> /dev/null || Fail "Command not found: 'sed'"
 
+    local with_filename
+    case "$fn_arg" in
+        -H) with_filename=true ;;
+        -h) with_filename=false ;;
+        *)
+            if (( ${#paths[@]} == 1 )) && test -f "${paths[0]}"
+            then
+                with_filename=false
+            else
+                with_filename=true
+            fi
+            ;;
+    esac
+
     local file
     for file in "${files[@]}"
     do
@@ -168,11 +202,17 @@ function Main {
             diff) diff -u "$file" <(sed -E "$expr" "$file") ;;
             editor) diff -u "$file" <(sed -E "$expr" "$file") >> "$PATCHFILE" ;;
             repl)
-                local content
-                content=$(grep -Eh "$regex" "$file" | sed -E "$expr")
-                printf "%s:%s\n" "$file" "$content"
+                if $with_filename
+                then
+                    grep -Eh "$regex" "$file" | sed -E "$expr" | while read -r
+                    do
+                        printf "%s:%s\n" "$file" "$REPLY"
+                    done
+                else
+                    grep -Eh "$regex" "$file" | sed -E "$expr"
+                fi
                 ;;
-            update) sed -E -i "$expr" "$file"
+            update) sed -E -i "$expr" "$file" ;;
         esac
     done
 
@@ -181,20 +221,26 @@ function Main {
             if "$EDITOR" "$PATCHFILE" && test -s "$PATCHFILE"
             then
                 patch -p0 < "$PATCHFILE"
-            else
+            elif test -z "$q_arg"
+            then
                 echo "Patch aborted"
             fi
             ;;
         update)
-            local -i nfiles="${#files[@]}"
-            if (( nfiles == 1 ))
+            if test -z "$q_arg"
             then
-                echo "1 file updated"
-            else
-                echo "$nfiles files updated"
+                local -i nfiles="${#files[@]}"
+                if (( nfiles == 1 ))
+                then
+                    echo "1 file updated"
+                else
+                    echo "$nfiles files updated"
+                fi
             fi
             ;;
     esac
+
+    return 0
 }
 
 Main "$@"
