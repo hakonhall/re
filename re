@@ -57,7 +57,7 @@ function Main {
             break
         else
             local opt="$1"
-            shift || Fail "Missing REGEX, see -h for usage"
+            shift
         fi
 
         case "$opt" in
