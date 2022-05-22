@@ -83,6 +83,20 @@ The complete description of how the fileset is calculated is as follows:
 7. Remove any paths matching the `--exclude` regex, if specified.
 8. Remove any paths whose content is determined to be binary by grep's `--binary-files=without-match` option.
 
+### Binary files
+
+`re` works best on text files.  The exact same matches shown with `re FOO`, can seen when enabling replacement with `re FOO BAR`, 
+and the exact same changes can be seen with `--diff` and `--editor`.  This is broken for binary files:  grep(1) prints
+"Binary file <pathname> matches", or from version 3.5 "grep: <pathname>: binary file matches".  sed(1) works on binary files,
+but neither of the three forms of replacement (plain, diff, and editor) would work well.
+  
+Therefore, `re` limits itself to text files for replacement, and therefore limits itself to text files for searching too.
+This means using the `-I`/`--binary-files=without-match` options with grep(1).  Using grep without this option may show more
+matches.
+
+Due to a bug in grep between version 2.23 and 3.4, `-I` may still output match binary file and output "Binary file <pathname> matches".
+You can use e.g. `--exclude` to exclude such files.
+
 ## Short option contraction
 
 Several short options can be combined into a single short-option argument.  For example the following two are equivalent:
