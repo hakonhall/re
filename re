@@ -6,7 +6,7 @@ set -o pipefail
 function Usage {
     cat <<'EOF'
 Usage: re [OPTION...] [--] REGEX [REPL]
-Runs recursive egrep, optionally replacing matches with REPL.
+Run recursive egrep(1), optionally replacing matches with REPL.
 
 With REPL, all matches of the extended regular expression REGEX in the text
 files below the current working directory are replaced by REPL.  REPL may
@@ -16,15 +16,16 @@ escapes \1 through \9 to refer to the corresponding matching sub-expressions.
 Options:
   -d,--diff               View the replacement as a unified diff(1) patch.
   -e,--editor             Open EDITOR to edit the patch before it is applied.
-  -x,--exclude GLOB       Same as grep(1) --exclude.
-  -X,--exclude-dir GLOB   Same as grep(1) --exclude-dir.
-  -f,--filename           Prefix each line with filename. Default with >1 file.
-  -F,--no-filename        Suppress prefixing each line with filename.
-  -i,--include GLOB       Same as grep(1) --include.
-  -l,--list               List the matched files only.
-  -p,--path PATH...       Run on PATH instead of '.'.  Repeatable.
+  -x,--exclude XREGEX     Exclude paths matching XREGEX.
+  -X,--exclude-name XGLOB Exclude filenames and directories matching XGLOB.
+  -f,--file FREGEX        Only include paths matching FREGEX.
+  -F,--filename FGLOB     Only include filenames matching FGLOB.
+  -i,--ignore-case        Ignore case when matching REGEX.
+  -l,--list               List the matched files only. REGEX optional.
+  -p,--path PATH...       Run on PATH instead of '.'.
   -q,--quiet              Avoid printing to stdout.
   -u,--update             Update the files in-place.
+  -w,--without-filename   Suppress prefixing each line with its path.
 EOF
 
     exit 0
@@ -32,94 +33,148 @@ EOF
 
 function Fail {
     echo "$1" >& 2
-    exit 1
+    exit 2
 }
 
 function Main {
-    local mode="" sep="" fn_arg="" q_arg=""
-    local -a paths=()
-    local -a grep_args=(-I)
+    local mode= sep= opt_h=-H opt_i= opt_q= fregex= xregex=
+    local -a paths=() grep_opts=(-I)
+    local -i matches_exit_code=0 no_matches_exit_code=1
 
-    while (( $# > 0 ))
+    local regex
+    local short_options=
+    while true
     do
-        case "$1" in
-            --)
-                shift
-                break
-                ;;
-            -d|--diff)
-                mode=diff
-                shift
-                ;;
-            -e|--editor)
-                mode=editor
-                shift
-                ;;
-            -f|--filename)
-                fn_arg=-H # --with-filename
-                shift
-                ;;
-            -F|--no-filename)
-                fn_arg=-h # --no-filename
-                shift
-                ;;
+        if (( ${#short_options} > 0 ))
+        then
+            local opt="-${short_options:0:1}"
+            short_options="${short_options:1}"
+        elif (( $# == 0 ))
+        then
+            test "$mode" == list || Fail "Missing REGEX, see -h for usage"
+            regex=. # Unfortunately, no grep regex will match an empty file
+            break
+        else
+            local opt="$1"
+            shift || Fail "Missing REGEX, see -h for usage"
+        fi
+
+        case "$opt" in
+            --) break ;;
+            -d|--diff) mode=diff ;;
+            -e|--editor) mode=editor ;;
             -x|--exclude)
-                grep_args+=(--exclude "$2")
-                shift 2 || Fail "Missing argument to $2"
+                xregex="$1"
+                shift || Fail "Missing argument to $opt"
                 ;;
-            -X|--exclude-dir)
-                grep_args+=(--exclude-dir "$2")
-                shift 2 || Fail "Missing argument to $2"
+            -X|--exclude-name)
+                grep_opts+=(--exclude "$1" --exclude-dir "$1")
+                shift || Fail "Missing argument to $opt"
+                ;;
+            -f|--file)
+                fregex="$1"
+                shift || Fail "Missing argument to $opt"
+                ;;
+            -F|--filename)
+                grep_opts+=(--include "$1")
+                shift || Fail "Missing argument to $opt"
                 ;;
             -h|--help) Usage ;;
-            -i|--include)
-                grep_args+=(--include "$2")
-                shift 2 || Fail "Missing argument to $2"
-                ;;
-            -l|--list)
-                mode=list
-                shift
-                ;;
+            -i|--ignore-case) opt_i=-i ;;
+            -l|--list) mode=list ;;
             -p|--path)
-                paths+=("$2")
-                shift 2 || Fail "Missing argument to $2"
+                paths+=("$1") # Add canonical path
+                shift || Fail "Missing argument to $opt"
                 ;;
-            -q|--quiet)
-                q_arg=-q
-                shift
-                ;;
+            -q|--quiet) opt_q=-q ;;
             -s|--separator)
-                # Undocumented option for use in emergencies.
-                sep="$2"
+                # Undocumented option to use when no sep is found automatically.
+                sep="$1"
                 (( ${#sep} == 1 )) || Fail "Invalid separator: '$sep'"
-                shift 2 || Fail "Missing argument to $2"
+                shift || Fail "Missing argument to $opt"
                 ;;
-            -u|--update)
-                mode=update
-                shift
+            -u|--update) mode=update ;;
+            -w|--without-filename) opt_h=-h ;; # aka --no-filename
+            -?|--*) Fail "Unknown option: '$opt'" ;;
+            -*) short_options="${opt:1}" ;;
+            *)
+                regex="$opt"
+                break
                 ;;
-            -*) Fail "Unknown option: '$1'" ;;
-            *) break ;;
         esac
     done
 
-    (( $# >= 1 )) || Fail "Missing REGEX, see -h for help"
-    local regex="$1"
-    shift
-
     type grep &> /dev/null || Fail "Command not found: 'grep'"
+
+    # Resolve paths
+    if test -n "$fregex" -o -n "$xregex"
+    then
+        # Some paths may start with "-", which find(1) cannot handle.
+        local -a normpaths=()
+        local path
+        for path in "${paths[@]}"
+        do
+            if test "$path"       == .   || \
+               test "${path:0:1}" == /   || \
+               test "${path:0:2}" == ./  || \
+               test "${path:0:3}" == ../
+            then
+                normpaths+=("$path")
+            else
+                normpaths+=(./"$path")
+            fi
+        done
+        (( ${#normpaths[@]} > 0 )) || normpaths=(.)
+
+        paths=()
+        find "${normpaths[@]}" -type f | while read -r
+        do
+            # TODO: Match against normpath, or stripped of leading "./"?
+            # TODO: Match against path equal to that output by -l.
+            local path="${REPLY#./}"
+            test -z "$fregex" || [[ "$path" =~ $fregex ]] || continue
+            test -z "$xregex" || ! [[ "$path" =~ $xregex ]] || continue
+            paths+=("$path") # Or $REPLY?
+        done
+
+        if (( ${#paths[@]} == 0 ))
+        then
+            test -n "$opt_q" || echo "No paths matched" >&2
+            return $no_matches_exit_code
+        fi
+    fi
 
     if test "$mode" == list
     then
-        grep --color=auto -rEl -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
-        return $?
-    elif (( $# == 0 ))
-    then
-        test "$mode" == "" || Fail "Missing REPL"
-        grep --color=auto -rE -e "$regex" $fn_arg $q_arg "${grep_args[@]}" "${paths[@]}"
-        return $?
+        if grep --color=auto -rEl $opt_h $opt_i $opt_q "${grep_opts[@]}" -e "$regex" "${paths[@]}" | while read -r
+            do
+                printf "%s\n" "${REPLY#./}"
+            done
+        then
+            return $matches_exit_code
+        elif (( $? == 1 ))
+        then
+            return $no_matches_exit_code
+        else
+            return 2
+        fi
     fi
 
+    if (( $# == 0 ))
+    then
+        test "$mode" == "" || Fail "Missing REPL"
+        if grep --color=auto -rE $opt_h $opt_i $opt_q "${grep_opts[@]}" -e "$regex" "${paths[@]}"
+        then
+            return $matches_exit_code
+        elif (( $? == 1 ))
+        then
+            return $no_matches_exit_code
+        else
+            return 2
+        fi
+    fi
+
+    test "$mode" != "" || mode=repl
     local repl="$1"
     shift
     (( $# == 0 )) || Fail "Too many arguments"
@@ -141,7 +196,7 @@ function Main {
 
     # sed -E is documented in sed(1) to use the same regular expressions as grep
     # -E.
-    local -a grep_cmd=(grep -rEl -e "$regex" "${grep_args[@]}" "${paths[@]}")
+    local -a grep_cmd=(grep -rEl $opt_i "${grep_opts[@]}" -e "$regex" "${paths[@]}")
     if "${grep_cmd[@]}" | mapfile -t
     then
         :
@@ -150,24 +205,16 @@ function Main {
         return 2 # Invalid REGEX: grep should already have written to stderr
     fi
 
-    if (( ${#MAPFILE[@]} == 0 ))
+    local -i nfiles="${#MAPFILE[@]}"
+    if (( nfiles == 0 ))
     then
-        if test "$mode" == update && test -z "$q_arg"
-        then
-            echo "0 files updated"
-        fi
-        return 1 # no matches => exit code 1 with grep, so too with replace?
+        test -n "$opt_q" || echo "No files matched" >&2
+        return $no_matches_exit_code
+    elif test -n "$opt_q" && [[ "$mode" =~ diff|repl ]] # or editor, update
+    then
+        return $matches_exit_code # Optimization
     fi
     local -a files=("${MAPFILE[@]}")
-
-    test "$mode" != "" || mode=repl
-
-    if test "$q_arg" == -q
-    then
-        case "$mode" in
-            repl|diff) return 0 ;;
-        esac
-    fi
 
     if test "$mode" == editor
     then
@@ -181,7 +228,7 @@ function Main {
     type sed &> /dev/null || Fail "Command not found: 'sed'"
 
     local with_filename
-    case "$fn_arg" in
+    case "$opt_h" in
         -H) with_filename=true ;;
         -h) with_filename=false ;;
         *)
@@ -197,19 +244,19 @@ function Main {
     local file
     for file in "${files[@]}"
     do
-        local expr="s$sep$regex$sep$repl${sep}g"
+        local expr="s$sep$regex$sep$repl$sep${opt_i:+i}"g
         case "$mode" in
-            diff) diff -u "$file" <(sed -E "$expr" "$file") ;;
-            editor) diff -u "$file" <(sed -E "$expr" "$file") >> "$PATCHFILE" ;;
+            diff) diff -u --label "old/$file" --label "new/$file" "$file" <(sed -E "$expr" "$file") ;;
+            editor) diff -u --label "old/$file" --label "new/$file" "$file" <(sed -E "$expr" "$file") >> "$PATCHFILE" ;;
             repl)
                 if $with_filename
                 then
-                    grep -Eh "$regex" "$file" | sed -E "$expr" | while read -r
+                    grep -Eh $opt_i "$regex" "$file" | sed -E "$expr" | while read -r
                     do
                         printf "%s:%s\n" "$file" "$REPLY"
                     done
                 else
-                    grep -Eh "$regex" "$file" | sed -E "$expr"
+                    grep -Eh $opt_i "$regex" "$file" | sed -E "$expr"
                 fi
                 ;;
             update) sed -E -i "$expr" "$file" ;;
@@ -220,27 +267,26 @@ function Main {
         editor)
             if "$EDITOR" "$PATCHFILE" && test -s "$PATCHFILE"
             then
-                patch -p0 < "$PATCHFILE"
-            elif test -z "$q_arg"
+                patch -p1 < "$PATCHFILE"
+            elif test -z "$opt_q"
             then
                 echo "Patch aborted"
             fi
             ;;
         update)
-            if test -z "$q_arg"
+            if test -z "$opt_q"
             then
-                local -i nfiles="${#files[@]}"
                 if (( nfiles == 1 ))
                 then
-                    echo "1 file updated"
+                    echo "Updated 1 file"
                 else
-                    echo "$nfiles files updated"
+                    echo "Updated $nfiles files"
                 fi
             fi
             ;;
     esac
 
-    return 0
+    return $matches_exit_code
 }
 
 Main "$@"
