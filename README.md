@@ -56,6 +56,20 @@ This will
 
 If you figure out in (3) that you'd like to abort the patching, you can clear the file before exiting.
 
+#### Example
+
+Your company has just changed its name from FOO to BAR, and you want to update all references to the company name:
+
+```
+$ re -e FOO BAR
+```
+
+You want to change `fileName` and `FileName` to use lower case `n` in all Java source files in a Maven project:
+
+```
+$ re -e -p src/main/java -p src/test/java -F '*.java' '([fF])ileName' '\1ilename'
+```
+
 ## File selection
 
 The `--path PATH`, `--file FREGEX`, `--filename FGLOB`, `--exclude XREGEX`, and `--exclude-name XGLOB` options select the files to operate on.  You can experiment using the `--list` options and by starting with:
@@ -83,7 +97,7 @@ The complete description of how the fileset is calculated is as follows:
 7. Remove any paths matching the `--exclude` regex, if specified.
 8. Remove any paths whose content is determined to be binary by grep's `--binary-files=without-match` option.
 
-### Binary files
+#### Binary files
 
 `re` works best on text files.  The exact same matches shown with `re FOO`, can seen when enabling replacement with `re FOO BAR`, 
 and the exact same changes can be seen with `--diff` and `--editor`.  This is broken for binary files:  grep(1) prints
