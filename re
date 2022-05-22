@@ -38,6 +38,7 @@ function Fail {
 
 function Main {
     local mode= sep= opt_h=-H opt_i= opt_q= fregex= xregex=
+    # -I may still lead to "Binary file <pathname> matches". Fixed in grep 3.5.
     local -a paths=() grep_opts=(-I)
     local -i matches_exit_code=0 no_matches_exit_code=1
 
