@@ -1,10 +1,11 @@
-# re
-Recursive egrep and replace tool
+# re - recursive egrep and replace tool
 
 There are two main use cases of `re`:
 
 * Recursive egrep, and
 * replace the text matched by recursive egrep, in-place
+
+These are described in their own sections below.
 
 ```
 Usage: re [OPTION...] [--] REGEX [REPL]
