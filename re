@@ -37,12 +37,12 @@ function Fail {
 }
 
 function Main {
-    local mode= sep= opt_h=-H opt_i= opt_q= fregex= xregex=
+    local mode= sep= opt_h=-H opt_i= opt_q= fregex= xregex= require_grep=false
     # -I may still lead to "Binary file <pathname> matches". Fixed in grep 3.5.
     local -a paths=() grep_opts=(-I)
     local -i matches_exit_code=0 no_matches_exit_code=1
 
-    local regex
+    local regex=
     local short_options=
     while true
     do
@@ -53,7 +53,6 @@ function Main {
         elif (( $# == 0 ))
         then
             test "$mode" == list || Fail "Missing REGEX, see -h for usage"
-            regex=. # Unfortunately, no grep regex will match an empty file
             break
         else
             local opt="$1"
@@ -71,6 +70,7 @@ function Main {
             -X|--exclude-name)
                 grep_opts+=(--exclude "$1" --exclude-dir "$1")
                 shift || Fail "Missing argument to $opt"
+                require_grep=true
                 ;;
             -f|--file)
                 fregex="$1"
@@ -79,6 +79,7 @@ function Main {
             -F|--filename)
                 grep_opts+=(--include "$1")
                 shift || Fail "Missing argument to $opt"
+                require_grep=true
                 ;;
             -h|--help) Usage ;;
             -i|--ignore-case) opt_i=-i ;;
@@ -100,6 +101,7 @@ function Main {
             -*) short_options="${opt:1}" ;;
             *)
                 regex="$opt"
+                (( ${#regex} > 0 )) || Fail "REGEX must be non-empty"
                 break
                 ;;
         esac
@@ -108,7 +110,7 @@ function Main {
     type grep &> /dev/null || Fail "Command not found: 'grep'"
 
     # Resolve paths
-    if test -n "$fregex" -o -n "$xregex"
+    if (( ${#fregex} > 0 || ${#xregex} > 0 || ${#regex} == 0 ))
     then
         # Some paths may start with "-", which find(1) cannot handle.
         local -a normpaths=()
@@ -127,6 +129,35 @@ function Main {
         done
         (( ${#normpaths[@]} > 0 )) || normpaths=(.)
 
+        if test "$mode" == list && ! $require_grep
+        then
+            # Using
+            #   find "${normpaths[@]}" -type f | while read -r
+            # takes 0.4s, while the find piped to /dev/null takes 0.02s
+            # with 10k files. Using
+            #   find "${normpaths[@]}" -type f | mapfile -t
+            #   for path in "${MAPFILE[@]}";...
+            # Takes 0.44s, slightly more. So we must use a pipeline of sed and
+            # greps.  Unfortunately grep -v has bad exit code (always 0).
+            if (( ${#fregex} > 0 )); then
+                if (( ${#xregex} > 0 )); then
+                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -E "$fregex" | grep -vE "$xregex"
+                else
+                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -E "$fregex"
+                fi
+            else
+                if (( ${#xregex} > 0 )); then
+                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -vE "$xregex"
+                else
+                    # I.e. #regex == 0.
+                    find "${normpaths[@]}" -type f | sed 's:^\./::'
+                fi
+            fi
+
+            return $matched_exit_code
+        fi
+
+        # TODO: optimize this as above
         paths=()
         find "${normpaths[@]}" -type f | while read -r
         do
@@ -147,6 +178,8 @@ function Main {
 
     if test "$mode" == list
     then
+        # Unfortunately, no grep regex will match an empty file
+        (( ${#regex} > 0 )) || regex=.
         if grep --color=auto -rEl $opt_h $opt_i $opt_q "${grep_opts[@]}" -e "$regex" "${paths[@]}" | while read -r
             do
                 printf "%s\n" "${REPLY#./}"
