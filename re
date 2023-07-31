@@ -14,6 +14,9 @@ contain the special character & to refer to the matched text, and the special
 escapes \1 through \9 to refer to the corresponding matching sub-expressions.
 
 Options:
+  -A ANUM                 Context after match, see grep(1).
+  -B BNUM                 Context before match, see grep(1).
+  -C CNUM                 Context before and after match, see grep(1).
   -d,--diff               View the replacement as a unified diff(1) patch.
   -e,--editor             Open EDITOR to edit the patch before it is applied.
   -x,--exclude XREGEX     Exclude paths matching XREGEX.
@@ -60,7 +63,17 @@ function Main {
         fi
 
         case "$opt" in
-            --) break ;;
+            --)
+                regex="$1"
+                (( ${#regex} > 0 )) || Fail "REGEX must be non-empty"
+                shift
+                break
+                ;;
+            -A|-B|-C)
+                grep_opts+=("$opt" "$1")
+                shift || Fail "Missing argument to $opt"
+                require_grep=true
+                ;;
             -d|--diff) mode=diff ;;
             -e|--editor) mode=editor ;;
             -x|--exclude)
