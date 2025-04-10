@@ -5,8 +5,11 @@ set -o pipefail
 
 function Usage {
     cat <<'EOF'
-Usage: re [OPTION...] [--] REGEX [REPL]
+Usage: re [OPTION...] [--] [REGEX [REPL]]
 Run recursive egrep(1), optionally replacing matches with REPL.
+
+Without REGEX, open a prompt to read it from stdin, run recursive grep, show
+results, and open emacs if there are <= 5 matched files.
 
 With REPL, all matches of the extended regular expression REGEX in the text
 files below the current working directory are replaced by REPL.  REPL may
@@ -25,6 +28,7 @@ Options:
   -F,--filename FGLOB     Only include filenames matching FGLOB.
   -i,--ignore-case        Ignore case when matching REGEX.
   -l,--list               List the matched files only. REGEX optional.
+  -n,--line-number        Add line number on match.
   -p,--path PATH...       Run on PATH instead of '.'.
   -q,--quiet              Avoid printing to stdout.
   -u,--update             Update the files in-place.
@@ -39,8 +43,8 @@ function Fail {
     exit 2
 }
 
-function Main {
-    local mode= sep= opt_h=-H opt_i= opt_q= fregex= xregex= require_grep=false
+function Re {
+    local mode= sep= opt_h=-H opt_i= opt_n= opt_q= fregex= xregex= require_grep=false
     # -I may still lead to "Binary file <pathname> matches". Fixed in grep 3.5.
     local -a paths=() grep_opts=(-I)
     local -i matches_exit_code=0 no_matches_exit_code=1
@@ -97,6 +101,7 @@ function Main {
             -h|--help) Usage ;;
             -i|--ignore-case) opt_i=-i ;;
             -l|--list) mode=list ;;
+            -n|--line-number) opt_n=-n ;;
             -p|--path)
                 paths+=("$1") # Add canonical path
                 shift || Fail "Missing argument to $opt"
@@ -121,6 +126,12 @@ function Main {
     done
 
     type grep &> /dev/null || Fail "Command not found: 'grep'"
+
+    if (( ${#opt_n} > 0 )) && test "$mode" == list
+    then
+        # Unfortunately, grep -n doesn't work with -l
+        Fail "-n/--line-number doesn't work with -l/--list"
+    fi
 
     # Resolve paths
     if (( ${#fregex} > 0 || ${#xregex} > 0 || ${#regex} == 0 ))
@@ -154,13 +165,13 @@ function Main {
             # greps.  Unfortunately grep -v has bad exit code (always 0).
             if (( ${#fregex} > 0 )); then
                 if (( ${#xregex} > 0 )); then
-                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -E "$fregex" | grep -vE "$xregex"
+                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -E -e "$fregex" | grep -vE -e "$xregex"
                 else
-                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -E "$fregex"
+                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -E -e "$fregex"
                 fi
             else
                 if (( ${#xregex} > 0 )); then
-                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -vE "$xregex"
+                    find "${normpaths[@]}" -type f | sed 's:^\./::' | grep -vE -e "$xregex"
                 else
                     # I.e. #regex == 0.
                     find "${normpaths[@]}" -type f | sed 's:^\./::'
@@ -210,7 +221,7 @@ function Main {
     if (( $# == 0 ))
     then
         test "$mode" == "" || Fail "Missing REPL"
-        if grep --color=auto -rE $opt_h $opt_i $opt_q "${grep_opts[@]}" -e "$regex" "${paths[@]}"
+        if grep --color=auto -rE $opt_h $opt_i $opt_n $opt_q "${grep_opts[@]}" -e "$regex" "${paths[@]}"
         then
             return $matches_exit_code
         elif (( $? == 1 ))
@@ -298,12 +309,12 @@ function Main {
             repl)
                 if $with_filename
                 then
-                    grep -Eh $opt_i "$regex" "$file" | sed -E "$expr" | while read -r
+                    grep -Eh $opt_i -e "$regex" "$file" | sed -E "$expr" | while read -r
                     do
                         printf "%s:%s\n" "$file" "$REPLY"
                     done
                 else
-                    grep -Eh $opt_i "$regex" "$file" | sed -E "$expr"
+                    grep -Eh $opt_i -e "$regex" "$file" | sed -E "$expr"
                 fi
                 ;;
             update) sed -E -i "$expr" "$file" ;;
@@ -334,6 +345,150 @@ function Main {
     esac
 
     return $matches_exit_code
+}
+
+declare -a EMACS_ARGS
+
+function EmacsReset {
+    EMACS_ARGS=()
+}
+
+function EmacsAddArg {
+    local file="$1"
+    local lineno="$2"
+    local regex="$3"
+    local line="$4"
+
+    if (( ${#lineno} > 0 ))
+    then
+        local column_spec=
+
+        if (( ${#regex} > 0 )) && [[ "$line" =~ $regex ]]
+        then
+            local prefix="${line%${BASH_REMATCH[0]}*}"
+            column_spec=:$(( ${#prefix} + 1 ))
+        fi
+
+        EMACS_ARGS+=(+"$lineno$column_spec")
+    fi
+
+    EMACS_ARGS+=("$file")
+}
+
+function EmacsSpawn {
+    setsid emacs "${EMACS_ARGS[@]}" &>/dev/null &
+}
+
+function ReLoop {
+    local -i min_unique_files=0
+    local -a files=() linenos=() file_lines=()
+    local saved_regex=
+
+    while read -e -r -p ">> "
+    do
+        local regex="$REPLY"
+        local raw=true
+
+        if [[ "$regex" =~ ^\\: ]]
+        then
+            raw=false
+            regex="${regex:1}"
+        fi
+
+        if $raw && [[ "$regex" =~ ^':e'(' '([0-9]+))?$ ]]
+        then
+            local num="${BASH_REMATCH[2]}"
+            if test "$num" == ""
+            then
+                echo "Usage: -e MIN_UNIQUE_FILES"
+                echo "max number of unique files to open emacs"
+            fi
+            min_unique_files="$num"
+            continue
+        elif $raw && [[ "$regex" =~ ^':h'$ ]]
+        then
+            echo "Open Emacs if #files <= $min_unique_files"
+            continue
+        elif $raw && [[ "$regex" =~ ^([0-9]+)$ ]]
+        then
+            local index="${BASH_REMATCH[1]}"
+            if (( index >= ${#files[@]} ))
+            then
+                echo "Index too large"
+                continue
+            fi
+
+            local file="${files[$index]}"
+            local lineno="${linenos[$index]}"
+            local file_line="${file_lines[$index]}"
+
+            EmacsReset
+            EmacsAddArg "$file" "$lineno" "$saved_regex" "$file_line"
+            EmacsSpawn
+        else
+            files=()
+            linenos=()
+            file_lines=()
+            saved_regex="$regex"
+            EmacsReset
+
+            local out
+            out=$(grep -Enr "$regex" .)
+            
+            if (( ${#out} == 0 ))
+            then
+                echo "No matches"
+                continue
+            fi
+
+            local -a lines=()
+            mapfile -t lines <<< "$out"
+
+            local -A unique_files=()
+            local line
+            for line in "${lines[@]}"
+            do
+                line="${line#./}"
+                [[ "$line" =~ ^([^:]+):([0-9]+):(.*) ]] || Fail "Invalid line: '$line'"
+                local file="${BASH_REMATCH[1]}"
+                local lineno="${BASH_REMATCH[2]}"
+                local file_line="${BASH_REMATCH[3]}"
+
+                files+=("$file")
+                linenos+=("$lineno")
+                file_lines+=("$file_line")
+
+                if test "${unique_files[$file]}" != 1
+                then
+                    EmacsAddArg "$file" "$lineno" "$regex" "$file_line"
+                    unique_files["$file"]=1
+                fi
+            done
+
+            local -i i=0
+            grep -Enr --color=yes "$regex" . | while read -r
+            do
+                # Unfortunately, with colors it's difficult to remove the prefix
+                # "./"
+                printf "%3d  %s\n" "$i" "$REPLY"
+                i=$(( i + 1 ))
+            done
+
+            if (( ${#unique_files[@]} <= min_unique_files ))
+            then
+                EmacsSpawn
+            fi
+        fi
+    done
+}
+
+function Main {
+    if (( $# > 0 ))
+    then
+        Re "$@"
+    else
+        ReLoop
+    fi
 }
 
 Main "$@"
